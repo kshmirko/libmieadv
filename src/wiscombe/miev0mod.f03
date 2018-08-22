@@ -1,17 +1,27 @@
 module miev0mod
-  use iso_c_binding
+  
   use mathutils
   implicit none
   
-  
+  type AerosolDistrParams
+    integer         ::  npts
+    real(kind=dp)   ::  r0, r1, gamma, dens
+  end type AerosolDistrParams
+
+  type, extends(AerosolDistrParams) :: SDistParams
+    real(kind=dp)       ::  wl
+    complex(kind=dp)    ::  midx
+    integer             ::  momdim
+  end type SDistParams 
 contains
   
-  subroutine miev0easydriver(xx, mre, mim, qext, qsca, gqsc, pmom, mxmdm) bind (c)
+  subroutine miev0easydriver(xx, midx, qext, qsca, gqsc, pmom, mxmdm)
     ! dummy parameters
-    real(C_DOUBLE), intent(in), value ::  xx, mre, mim
-    integer(C_INT), intent(in), value ::  mxmdm
-    real(C_DOUBLE), intent(out)       ::  qext, qsca, gqsc
-    real(C_DOUBLE), intent(out)       ::  pmom(0:mxmdm,4)
+    real(kind=dp)             ::  xx
+    complex(kind=dp)          ::  midx
+    integer, optional         ::  mxmdm
+    real(kind=dp)             ::  qext, qsca, gqsc
+    real(kind=dp)             ::  pmom(0:,:)
     
     ! actually used parametrs
     LOGICAL  ANYANG, PERFCT, PRNT(2)
@@ -19,15 +29,15 @@ contains
     REAL     GQSC_S, MIMCUT, QEXT_S, QSCA_S, SPIKE, XMU
     COMPLEX  CREFIN, SFORW, SBACK, S1(1), S2(1), TFORW(2), TBACK(2)
     REAL, ALLOCATABLE ::  PMOM_TMP(:,:)
-    complex(kind=dp)  ::  midx
     
     EXTERNAL MIEV0
     INTEGER I, J
     
-    
-    midx = dcmplx(mre, mim)
-    
-    MOMDIM = mxmdm
+    if(.not. present(mxmdm)) then
+      MOMDIM = size(pmom, 1)-1
+    else
+      MOMDIM = mxmdm
+    end if
     
     ANYANG = .TRUE.
     PERFCT = .FALSE.
@@ -39,6 +49,7 @@ contains
     IPOLZN = +1234
     ALLOCATE(PMOM_TMP(0:MOMDIM, 4))
     
+    
     XMU = 0.0
     
     call MIEV0( XX, CREFIN, PERFCT, MIMCUT, ANYANG, NUMANG, XMU,&
@@ -46,11 +57,12 @@ contains
                 PMOM_TMP, SFORW, SBACK, S1, S2, TFORW, TBACK,&
                 SPIKE )
     
+    
     ! COPY VALUES
     qext = DBLE(QEXT_S)
     qsca = DBLE(QSCA_S)
     gqsc = DBLE(GQSC_S)
-    
+
     ! COPY MOMENTS
     DO I=1, 4
       DO J=0, MOMDIM
@@ -58,30 +70,51 @@ contains
       END DO
     END DO
     
-    
+   
     DEALLOCATE(PMOM_TMP)
     
   end subroutine miev0easydriver
+
+  subroutine miesdist1(params, pmom, ext, sca, asy, vol, ierr)
+    type(SDistParams), intent(in)   ::  params
+    real(kind=dp), intent(out), optional  ::  ext, sca, asy, vol
+    integer, intent(out), optional        ::  ierr
+    real(kind=dp), intent(inout)          ::  pmom(0:,:)
+
+    real(kind=dp), allocatable            ::  xs(:), ys(:)
+
+    allocate(xs(params%npts))
+    call linspace(params%r0, params%r1, xs)
+    ys = xs**(params%gamma)
+
+    call miesdist(xs, ys, params%midx, params%wl, pmom, ext, sca, asy, vol, ierr)
+
+    deallocate(xs, ys)
+  end subroutine miesdist1
   
-  subroutine miesdist(xs, ys, N, mre, mim, wl, pmom, momdim, ext, sca, asy, vol, ierr) bind (c)
-    real(C_DOUBLE), intent(in)   ::  xs(N), ys(N)
-    real(C_DOUBLE), intent(in), value ::  mre, mim, wl
-    real(C_DOUBLE), intent(inout)::  pmom(0:momdim, 4)
-    real(C_DOUBLE), intent(out)  ::  ext, sca, asy, vol
-    integer(C_INT), intent(in), value  ::  momdim, N
-    integer(C_INT), intent(out)        ::  ierr
+  subroutine miesdist(xs, ys, midx, wl, pmom, ext, sca, asy, vol, ierr)
+    real(kind=dp), intent(in)   ::  xs(:), ys(:), wl
+    complex(kind=dp), intent(in)::  midx
+    real(kind=dp), intent(inout)::  pmom(0:, :)
+    real(kind=dp), intent(out), optional  ::  ext, sca, asy, vol
+    integer, intent(out), optional        ::  ierr
     
     integer     ::  nsize, I,J,L
-    complex(kind=dp)  :: midx
     real(kind=dp) ::  k, xx, xsquared, xcubed, qext, qsca, gqsc
     real(kind=dp), allocatable  ::  pmom_tmp(:,:,:), extinction(:),&
                                     scattering(:), asymetry(:), volume(:),&
                                     pmom_i(:,:)
-    real(kind=dp) :: norm    
+    real(kind=dp) :: norm
+    integer       :: momdim    
     
-    midx = dcmplx(mre, mim)
-    
-    nsize =N
+    momdim = size(pmom, 1)-1
+    nsize = size(xs,1)
+    if (nsize/=size(ys,1)) then
+      if(present(ierr)) then
+        ierr=-1
+      end if
+      return
+    end if
     
     k = 2.0_dp*pi/wl
     
@@ -91,8 +124,7 @@ contains
               
     do I=1, nsize
       xx = k*xs(I)
-      
-      call miev0easydriver(xx, mre, mim, qext, qsca, gqsc, pmom_i, momdim)
+      call miev0easydriver(xx, midx, qext, qsca, gqsc, pmom_i)
       xsquared = xs(I)*xs(I)*1.0D-12
       xcubed = xsquared*xs(I)*1.0D-6
       
@@ -110,14 +142,14 @@ contains
     end do
     
     norm = trapz(xs, ys)
+
+    if (present(ext)) ext = trapz(xs, extinction) / norm
     
-    ext = trapz(xs, extinction) / norm
+    if (present(sca)) sca = trapz(xs, scattering) / norm
     
-    sca = trapz(xs, scattering) / norm
+    if (present(asy)) asy = trapz(xs, asymetry) / norm
     
-    asy = trapz(xs, asymetry) / norm
-    
-    vol = trapz(xs, volume) / norm
+    if (present(vol)) vol = trapz(xs, volume) / norm
     
     DO I=1, 4
       DO J=0, momdim
