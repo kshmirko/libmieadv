@@ -1,7 +1,7 @@
 [default]
 compiler        = Gnu
 cflags          = -c -fPIC
-lflags          = -shared -O3
+lflags          =  -O3
 mod_dir         = ./mod/
 obj_dir         = ./obj/
 build_dir       = ./build/
